@@ -15,9 +15,9 @@ use FacturaScripts\Core\Template\InitClass;
  * FSOffline plugin initialization.
  *
  * This plugin is a JavaScript library. It does not register PHP models,
- * controllers or extensions. Its only deliverable is the file
- * Assets/JS/FSOffline.js, which is merged by FacturaScripts into
- * Dinamic/Assets/JS/FSOffline.js and can be loaded by any other plugin.
+ * controllers or extensions. Its deliverable is the Assets/JS/FSOffline.js entry
+ * file (plus the ES modules under Assets/JS/FSOffline/), which FacturaScripts
+ * merges into Dinamic/Assets/JS/ so any other plugin can load it.
  *
  * @author Jose Antonio Cuello Principal <yopli2000@gmail.com>
  */

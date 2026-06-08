@@ -13,9 +13,10 @@ Database
 
 ## Cargar la librería
 
-Este plugin solo aporta el archivo `Assets/JS/FSOffline.js`. FacturaScripts lo
-fusiona automáticamente en `Dinamic/Assets/JS/FSOffline.js`, por lo que cualquier
-otro plugin puede cargarlo desde su controlador:
+El consumidor solo necesita añadir **un único asset**, `FSOffline.js`.
+FacturaScripts fusiona la carpeta `Assets/` en `Dinamic/Assets/` (incluidas las
+subcarpetas), por lo que cualquier otro plugin puede cargarlo desde su
+controlador:
 
 ```php
 use FacturaScripts\Dinamic\Lib\AssetManager;
@@ -24,12 +25,31 @@ use FacturaScripts\Core\Tools;
 AssetManager::add('js', Tools::config('route') . '/Dinamic/Assets/JS/FSOffline.js');
 ```
 
+`FSOffline.js` carga **bajo demanda** sus clases internas mediante `import()`
+dinámico, así que no hace falta añadir ningún otro `<script>` ni preocuparse del
+orden de carga.
+
 Para que esté disponible, el plugin que lo use debe declarar la dependencia en su
 `facturascripts.ini`:
 
 ```ini
 required = 'FSOffline'
 ```
+
+## Estructura de archivos
+
+```
+Assets/JS/
+├── FSOffline.js                  # Entry/fachada pública (único asset a cargar)
+└── FSOffline/                    # Módulos ES privados, cargados por import()
+    ├── IndexedDBDriver.js        # Envoltura de bajo nivel sobre IndexedDB
+    ├── OfflineStore.js           # Store lógico (claves compuestas)
+    └── OfflineDatabase.js        # Una base = un object store físico
+```
+
+Solo `FSOffline.js` es un script clásico. Los archivos de `FSOffline/` son
+módulos ES (`export`) y **solo** se cargan vía `import()` dinámico desde la
+fachada, lo que mantiene las clases internas fuera del objeto global.
 
 ## Uso
 
@@ -79,12 +99,16 @@ Todos los métodos son asíncronos y devuelven `Promise`.
   Los stores lógicos se emulan mediante **claves compuestas** (`store:key`). Esto
   evita la creación dinámica de object stores y los problemas de versionado y migraciones de IndexedDB.
 - La API pública nunca expone IndexedDB ni las clases internas
-  (`IndexedDBDriver`, `OfflineDatabase`, `OfflineStore`).
+  (`IndexedDBDriver`, `OfflineDatabase`, `OfflineStore`). Al ser módulos ES
+  cargados por `import()`, viven en scope de módulo y no en el objeto global.
+- Cada responsabilidad vive en su propio archivo, así el proyecto escala sin que
+  los archivos crezcan.
 
 ## Futuras ampliaciones
 
-La arquitectura está preparada para añadir, en archivos separados y sin romper la
-API pública, extensiones como:
+La arquitectura está preparada para añadir nuevas responsabilidades como módulos
+ES dentro de `Assets/JS/FSOffline/`, cargados con `import()` desde la fachada
+(igual que hace `loadCore()`), sin romper la API pública:
 
 ```javascript
 FSOffline.Cache
@@ -92,3 +116,6 @@ FSOffline.Queue
 FSOffline.Sync
 FSOffline.Connection
 ```
+
+Cada extensión debe apoyarse únicamente en la API pública
+(`FSOffline.use` / `FSOffline.store`), manteniendo las clases internas privadas.

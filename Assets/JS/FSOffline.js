@@ -12,13 +12,16 @@
  *
  * It hides every IndexedDB detail (open, transaction, objectStore, ...) behind a
  * simple model:
- *
  *     Database
  *      └─ Store (logical)
  *          └─ Key => Value
  *
- * Public API:
+ * This is the ONLY file a consumer plugin needs to load:
+ *     AssetManager::add('js', Tools::config('route') . '/Dinamic/Assets/JS/FSOffline.js');
  *
+ * The internal classes live in the FSOffline/ folder as ES modules and are loaded lazily.
+ *
+ * Public API:
  *     await FSOffline.use('PortalAgente');
  *
  *     const products = FSOffline.store('products');
@@ -27,278 +30,42 @@
  *     const all  = await products.all();
  *     await products.delete('REF001');
  *     await products.clear();
- *
- * Design notes:
- *  - Every database name maps to its own IndexedDB database.
- *  - Each IndexedDB database uses a SINGLE physical object store. Logical stores
- *    are emulated through composite keys ("storeName:key"). This avoids dynamic
- *    object store creation and the IndexedDB versioning / migration problems
- *    that come with it.
- *  - All public methods are asynchronous and return Promises.
  */
+
+// Base URL and version query of THIS script.
+// document.currentScript is only available while the script runs synchronously, so we read it now.
+// - ASSETS_BASE:
+//     resolves the modules regardless of the FacturaScripts installation path (root or subdirectory).
+// - VERSION:
+//     propagates the cache-busting query (e.g. "?v=...") the consumer used to load this file, so the modules share the same cache lifecycle.
+const FS_OFFLINE_BASE = new URL('.', document.currentScript.src).href;
+const FS_OFFLINE_VERSION = new URL(document.currentScript.src).search;
+
+// Publish global namespace
 window.FSOffline = window.FSOffline || {};
 
 (function (FSOffline) {
+    const databases = new Map();       // Cache of opened databases.
+    let activeDatabase = null;                  // Currently active database.
+    let OfflineDatabase = null;                 // Lazily imported OfflineDatabase class (loaded once).
 
     /**
-     * Low level IndexedDB wrapper.
+     * Loads the internal core modules on first use through dynamic import().
+     * OfflineDatabase pulls IndexedDBDriver and OfflineStore via its own static
+     * imports, so a single dynamic import bootstraps the whole graph.
      *
-     * Manages a single connection and a single physical object store. It only
-     * knows about physical keys; it has no concept of logical stores.
+     * @returns {Promise<Function>} The OfflineDatabase class.
      */
-    class IndexedDBDriver {
-
-        /**
-         * @param {string} databaseName - Name of the IndexedDB database.
-         * @param {string} objectStoreName - Name of the single physical object store.
-         */
-        constructor(databaseName, objectStoreName) {
-            this.databaseName = databaseName;
-            this.objectStoreName = objectStoreName;
-            this.connection = null;
-            this.openPromise = null;
+    async function loadCore() {
+        if (!OfflineDatabase) {
+            const module = await import(FS_OFFLINE_BASE + 'FSOffline/OfflineDatabase.js' + FS_OFFLINE_VERSION);
+            OfflineDatabase = module.OfflineDatabase;
         }
-
-        /**
-         * Opens (or reuses) the database connection.
-         *
-         * @returns {Promise<IDBDatabase>}
-         */
-        open() {
-            if (this.connection) {
-                return Promise.resolve(this.connection);
-            }
-            if (this.openPromise) {
-                return this.openPromise;
-            }
-
-            this.openPromise = new Promise((resolve, reject) => {
-                const request = indexedDB.open(this.databaseName, 1);
-
-                // Create the single physical object store on first use.
-                request.onupgradeneeded = (event) => {
-                    const db = event.target.result;
-                    if (false === db.objectStoreNames.contains(this.objectStoreName)) {
-                        db.createObjectStore(this.objectStoreName);
-                    }
-                };
-
-                request.onsuccess = (event) => {
-                    this.connection = event.target.result;
-                    resolve(this.connection);
-                };
-
-                request.onerror = (event) => reject(event.target.error);
-                request.onblocked = () => reject(new Error('FSOffline: database "' + this.databaseName + '" is blocked.'));
-            });
-
-            return this.openPromise;
-        }
-
-        /**
-         * Runs a callback inside a transaction and resolves with the request result.
-         *
-         * @param {string} mode - "readonly" or "readwrite".
-         * @param {function(IDBObjectStore): (IDBRequest|null)} callback
-         * @returns {Promise<*>}
-         */
-        async run(mode, callback) {
-            const db = await this.open();
-
-            return new Promise((resolve, reject) => {
-                const transaction = db.transaction(this.objectStoreName, mode);
-                const store = transaction.objectStore(this.objectStoreName);
-                const request = callback(store);
-
-                let result;
-                if (request) {
-                    request.onsuccess = () => {
-                        result = request.result;
-                    };
-                    request.onerror = () => reject(request.error);
-                }
-
-                transaction.oncomplete = () => resolve(result);
-                transaction.onerror = () => reject(transaction.error);
-                transaction.onabort = () => reject(transaction.error);
-            });
-        }
-
-        /**
-         * @param {IDBValidKey} key
-         * @returns {Promise<*>}
-         */
-        get(key) {
-            return this.run('readonly', (store) => store.get(key));
-        }
-
-        /**
-         * @param {IDBKeyRange} range
-         * @returns {Promise<Array>}
-         */
-        getAll(range) {
-            return this.run('readonly', (store) => store.getAll(range));
-        }
-
-        /**
-         * @param {IDBValidKey} key
-         * @param {*} value
-         * @returns {Promise<void>}
-         */
-        put(key, value) {
-            return this.run('readwrite', (store) => store.put(value, key));
-        }
-
-        /**
-         * Deletes a single key or every key inside a key range.
-         *
-         * @param {IDBValidKey|IDBKeyRange} keyOrRange
-         * @returns {Promise<void>}
-         */
-        delete(keyOrRange) {
-            return this.run('readwrite', (store) => store.delete(keyOrRange));
-        }
+        return OfflineDatabase;
     }
-
-    /**
-     * A logical store inside a database.
-     *
-     * It maps logical keys to physical composite keys ("name:key") and exposes
-     * the simple key/value operations the public API offers.
-     */
-    class OfflineStore {
-
-        /**
-         * @param {IndexedDBDriver} driver
-         * @param {string} name - Logical store name.
-         */
-        constructor(driver, name) {
-            this.driver = driver;
-            this.name = name;
-            this.separator = ':';
-        }
-
-        /**
-         * Builds the physical composite key for a logical key.
-         *
-         * @param {string|number} key
-         * @returns {string}
-         */
-        physicalKey(key) {
-            return this.name + this.separator + key;
-        }
-
-        /**
-         * Builds the key range that matches every physical key belonging to this
-         * logical store ("name:" prefix).
-         *
-         * @returns {IDBKeyRange}
-         */
-        keyRange() {
-            const prefix = this.name + this.separator;
-            return IDBKeyRange.bound(prefix, prefix + '￿', false, false);
-        }
-
-        /**
-         * Returns the value stored under a key, or null when it does not exist.
-         *
-         * @param {string|number} key
-         * @returns {Promise<*>}
-         */
-        async get(key) {
-            const value = await this.driver.get(this.physicalKey(key));
-            return value === undefined ? null : value;
-        }
-
-        /**
-         * Stores a value under a key. Returns the stored value.
-         *
-         * @param {string|number} key
-         * @param {*} value
-         * @returns {Promise<*>}
-         */
-        async set(key, value) {
-            await this.driver.put(this.physicalKey(key), value);
-            return value;
-        }
-
-        /**
-         * Deletes a single key.
-         *
-         * @param {string|number} key
-         * @returns {Promise<void>}
-         */
-        async delete(key) {
-            return this.driver.delete(this.physicalKey(key));
-        }
-
-        /**
-         * Returns every value stored in this logical store.
-         *
-         * @returns {Promise<Array>}
-         */
-        async all() {
-            return this.driver.getAll(this.keyRange());
-        }
-
-        /**
-         * Removes every value of this logical store, leaving other stores intact.
-         *
-         * @returns {Promise<void>}
-         */
-        async clear() {
-            return this.driver.delete(this.keyRange());
-        }
-    }
-
-    /**
-     * Represents a single offline database.
-     *
-     * Owns one IndexedDBDriver (one physical object store) and creates logical
-     * stores on demand.
-     */
-    class OfflineDatabase {
-
-        /**
-         * @param {string} name
-         */
-        constructor(name) {
-            this.name = name;
-            this.driver = new IndexedDBDriver(name, OfflineDatabase.OBJECT_STORE_NAME);
-        }
-
-        /**
-         * Opens the underlying connection.
-         *
-         * @returns {Promise<IDBDatabase>}
-         */
-        open() {
-            return this.driver.open();
-        }
-
-        /**
-         * Returns a logical store bound to this database.
-         *
-         * @param {string} storeName
-         * @returns {OfflineStore}
-         */
-        store(storeName) {
-            return new OfflineStore(this.driver, storeName);
-        }
-    }
-
-    // Name of the single physical object store used inside every database.
-    OfflineDatabase.OBJECT_STORE_NAME = 'keyValueStore';
-
-    // Cache of opened databases, keyed by database name.
-    const databases = new Map();
-
-    // Currently active database, selected through FSOffline.use().
-    let activeDatabase = null;
 
     /**
      * Selects (and opens, creating it if needed) the active database.
-     *
      * Every database name lives as an independent IndexedDB database, so several
      * plugins (PortalAgente, ComprasRemotas, ...) can coexist without collisions.
      *
@@ -310,9 +77,10 @@ window.FSOffline = window.FSOffline || {};
             throw new Error('FSOffline.use() requires a database name.');
         }
 
+        const DatabaseClass = await loadCore();
         let database = databases.get(databaseName);
         if (!database) {
-            database = new OfflineDatabase(databaseName);
+            database = new DatabaseClass(databaseName);
             databases.set(databaseName, database);
         }
 
@@ -323,11 +91,11 @@ window.FSOffline = window.FSOffline || {};
 
     /**
      * Returns a logical store from the active database.
-     *
      * The returned reference can be stored and reused for several operations.
+     * It is synchronous: FSOffline.use() must have been awaited first.
      *
      * @param {string} storeName
-     * @returns {OfflineStore}
+     * @returns {object} An OfflineStore instance.
      */
     FSOffline.store = function (storeName) {
         if (!activeDatabase) {
@@ -349,10 +117,10 @@ window.FSOffline = window.FSOffline || {};
     };
 
     /**
-     * Future extensions (FSOffline.Cache, FSOffline.Queue, FSOffline.Sync,
-     * FSOffline.Connection, ...) can be attached to this same FSOffline object
-     * in separate files. They may reuse the public facade above without touching
-     * the private classes, keeping the public API stable.
+     * Future extensions (FSOffline.Cache, FSOffline.Queue, FSOffline.Sync, FSOffline.Connection, ...)
+     * can be added as their own ES modules under the FSOffline/ folder
+     * and loaded here with dynamic import(), the same way as loadCore() does.
+     * They should rely only on the public facade above, keeping
+     * the public API stable and the internal classes private.
      */
-
 })(window.FSOffline);
