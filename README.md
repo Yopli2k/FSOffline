@@ -156,6 +156,70 @@ plantillas y sin escribir nada (BD/log). Es el endpoint de comprobación que usa
 `Connection` para confirmar que el servidor está vivo. La protección anti-DoS
 corresponde a la infraestructura (rate limiting del proxy), no al controlador.
 
+## Cache de lectura y escrituras offline
+
+Sobre `Http` se montan dos políticas, declaradas **por petición**: la lectura se
+cachea sola y la escritura se aplica en local cuando no hay servidor.
+
+### Lectura: `cache` spec (network-first)
+
+```javascript
+const res = await FSOffline.Http.post(url, formData, {
+    cache: { db: 'PortalAgente', store: 'catalog', key: 'section:5', ttl: 3600000 }
+    //   key: string | (url, options) => string ; ttl opcional ; transform opcional
+});
+// res.fromCache === true cuando viene de la cache (offline o fallo de red)
+```
+
+- **Online**: se pide al servidor y, si responde OK, se guarda en cache.
+- **Offline / fallo de red**: se sirve de cache (aunque esté caducada).
+- Solo es cache de respaldo: online siempre va a la red (network-first).
+
+### Escritura: `offline` hook
+
+```javascript
+await FSOffline.Http.post(url, formData, {
+    offline: {
+        db: 'PortalAgente', store: 'order',
+        apply: async (ctx) => {
+            // ctx.body  = campos de la petición ya parseados a objeto
+            // ctx.store = store key/value plano (sin TTL) para el estado de dominio
+            const order = await ctx.store.get(ctx.body.idorder) || { idorder: ctx.body.idorder, lines: [] };
+            // ... mutar order con ctx.body ...
+            await ctx.store.set(order.idorder, order);
+            return { error: false, order };   // respuesta sintética para tu onSuccess
+        },
+        queue: true   // registra la escritura para el futuro FSOffline.Sync
+    }
+});
+```
+
+Cuando no se alcanza el servidor (offline o fallo de red) y hay `offline.apply`,
+FSOffline llama a tu callback para que mutes el estado local, y devuelve
+`{ ok: true, data: <lo que devuelva apply>, fromCache: true, offline, applied: true }`.
+Tu `onSuccess` distingue por `res.offline` / `res.applied` para repintar solo lo
+que cambió. Online, no se llama a `apply`: la escritura va al servidor como siempre.
+
+### FSOffline.Cache (bajo nivel)
+
+| Método | Descripción |
+| --- | --- |
+| `Cache.scope(db, store)` | Handle de cache (con TTL) para ese `db`/`store`. |
+| `scope.set(key, value, {ttl})` | Guarda con TTL opcional. |
+| `scope.get(key, {allowStale})` | Valor, o `null` si falta/caducó (salvo `allowStale`). |
+| `scope.delete(key)` / `scope.clear()` | Elimina una clave / todo el store. |
+| `scope.prune()` | Elimina las entradas caducadas. Devuelve el nº borradas. |
+| `Cache.rawStore(db, store)` | Store key/value **plano** (sin TTL), p.ej. el pedido. |
+
+Cada entrada se guarda como `{ k, v, t, ttl }`. Apunta a `db`/`store` sin cambiar
+la base activa, así varios plugins cachean en paralelo sin colisionar.
+
+### Cola de escrituras (`__queue__`)
+
+`queue: true` graba la escritura en el store `__queue__` de la base del plugin con
+formato `{ id, url, method, body, ts }`. **Nadie la drena todavía**: el reenvío al
+servidor y la reconciliación al reconectar son `FSOffline.Sync`, una fase posterior.
+
 ## Decisiones de diseño
 
 - Cada nombre de base de datos se corresponde con una base de datos IndexedDB
@@ -177,11 +241,9 @@ ES dentro de `Assets/JS/FSOffline/`, cargados con `import()` desde la fachada
 (igual que hace `loadCore()`), sin romper la API pública:
 
 ```javascript
-FSOffline.Cache
-FSOffline.Queue
-FSOffline.Sync
+FSOffline.Sync   // reenvío de la cola de escrituras y reconciliación al reconectar
 ```
 
-Cada extensión debe apoyarse únicamente en la API pública
-(`FSOffline.use` / `FSOffline.store` / `FSOffline.Connection` / `FSOffline.Http`),
+Cada extensión debe apoyarse únicamente en la API pública (`FSOffline.use` /
+`FSOffline.store` / `FSOffline.Connection` / `FSOffline.Http` / `FSOffline.Cache`),
 manteniendo las clases internas privadas.

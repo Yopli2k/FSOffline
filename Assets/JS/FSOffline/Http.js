@@ -6,36 +6,47 @@
  * This program and its files are under the terms of the license specified in the LICENSE file.
  *
  * ES module: loaded through dynamic import() from FSOffline.js (via FSOffline.connect()).
- * It pulls the Connection singleton with a static import, so a single dynamic
- * import of this file bootstraps both modules sharing the same Connection instance.
+ *
+ * It statically imports Connection and Cache and RE-EXPORTS them, so a single
+ * dynamic import of this file bootstraps the whole offline layer with one shared
+ * instance of each (the facade must NOT import Connection.js / Cache.js with a
+ * different URL query, or the browser would create duplicate singletons).
  */
 "use strict";
 
 import { Connection } from './Connection.js';
+import { Cache } from './Cache.js';
+
+export { Connection, Cache };
 
 /**
  * The single network gateway for the app.
  *
- * It wraps fetch with a timeout (AbortController), normalizes the result and
- * feeds the connection state into Connection. It never throws to the caller:
- * every call resolves to a Result object.
+ * It wraps fetch with a timeout, feeds the connection state into Connection and
+ * normalizes the result. It never throws to the caller: every call resolves to a
+ * Result object.
  *
  * Result shape:
  *   {
- *     ok:           boolean,  // response.ok (HTTP 2xx)
+ *     ok:           boolean,  // response.ok, or true for an applied offline write
  *     status:       number,   // HTTP status, 0 when there was no response
- *     data:         *,        // parsed JSON, or text, or null
+ *     data:         *,        // parsed JSON, text, cached value or apply() output
  *     networkError: boolean,  // true on fetch throw / timeout (no response)
- *     offline:      boolean,  // true when the request was not even attempted
+ *     offline:      boolean,  // true when not even attempted (Connection OFFLINE)
+ *     fromCache:    boolean,  // true when data comes from cache / offline apply
+ *     applied:      boolean,  // true when an offline write hook mutated local state
  *     aborted:      boolean,  // true when the request was aborted
  *     cancelled:    boolean   // true when aborted by the caller's own signal
  *   }
  *
+ * Per-request options (besides method/body/headers/timeout/signal/force):
+ *   - cache:   { db, store, key, ttl?, transform? }  read-through response cache.
+ *   - offline: { db, store, apply(ctx), queue? }     local handler for writes.
+ *
  * Connectivity contract:
  * - Got a response (even 4xx/5xx) -> Connection.reportSuccess() (server alive).
  * - Network throw / timeout       -> Connection.reportFailure().
- * - Caller-cancelled (external signal, not our timeout) -> neither, it is not a
- *   connectivity signal.
+ * - Caller-cancelled (external signal, not our timeout) -> neither.
  */
 class HttpClient {
     constructor() {
@@ -47,12 +58,6 @@ class HttpClient {
      *
      * @param {string} url
      * @param {object} [options]
-     * @param {string} [options.method='GET']
-     * @param {*} [options.body=null]
-     * @param {object} [options.headers={}]
-     * @param {number} [options.timeout=15000]
-     * @param {AbortSignal} [options.signal=null]  Caller signal to cancel.
-     * @param {boolean} [options.force=false]      Bypass the offline short-circuit.
      * @returns {Promise<object>} Result
      */
     async request(url, options = {}) {
@@ -62,14 +67,15 @@ class HttpClient {
             headers = {},
             timeout = this.defaultTimeout,
             signal = null,
-            force = false
+            force = false,
+            cache = null,
+            offline = null
         } = options;
 
-        // 1. Offline short-circuit: do not waste a timeout. Serve from cache now.
-        //    Activity nudges Connection to (maybe) probe in the background.
+        // 1. Offline short-circuit: do not waste a timeout. Serve cache / apply now.
         if (!force && !Connection.isOnline()) {
             Connection.notifyActivity();
-            return this._result({ networkError: true, offline: true });
+            return this._fallback({ url, method, body, options, cache, offline, offlineFlag: true, networkError: false });
         }
 
         // 2. Timeout via AbortController. We flag our own timeout so a caller
@@ -91,6 +97,13 @@ class HttpClient {
             Connection.reportSuccess();
 
             const data = await this._parse(response);
+
+            // Read-through cache: store successful responses.
+            if (cache && response.ok) {
+                const toStore = typeof cache.transform === 'function' ? cache.transform(data) : data;
+                await Cache.scope(cache.db, cache.store).set(this._cacheKey(cache, url, options), toStore, { ttl: cache.ttl });
+            }
+
             return this._result({ ok: response.ok, status: response.status, data });
         } catch (error) {
             const aborted = error && error.name === 'AbortError';
@@ -101,7 +114,7 @@ class HttpClient {
             }
 
             Connection.reportFailure();
-            return this._result({ networkError: true, aborted });
+            return this._fallback({ url, method, body, options, cache, offline, offlineFlag: false, networkError: true });
         } finally {
             clearTimeout(timer);
         }
@@ -140,6 +153,94 @@ class HttpClient {
     /* ----------------------------- private ----------------------------- */
 
     /**
+     * Resolves what to return when the server could not be reached, either by the
+     * offline short-circuit (offlineFlag true) or by a network failure mid-request
+     * (offlineFlag false). Writes are applied locally; reads are served from cache.
+     *
+     * @param {object} ctx
+     * @returns {Promise<object>}
+     */
+    async _fallback({ url, method, body, options, cache, offline, offlineFlag, networkError }) {
+        // WRITE: hand it to the plugin to apply against local state.
+        if (offline && typeof offline.apply === 'function') {
+            const store = await Cache.rawStore(offline.db, offline.store);
+            const data = await offline.apply({ url, method, body: this._bodyToObject(body), store, online: false });
+
+            if (offline.queue) {
+                await this._enqueue(offline.db, { url, method, body });
+            }
+
+            return this._result({ ok: true, data, fromCache: true, offline: offlineFlag, networkError, applied: true });
+        }
+
+        // READ: serve from cache (stale allowed, since we could not refresh).
+        if (cache) {
+            const value = await Cache.scope(cache.db, cache.store).get(this._cacheKey(cache, url, options), { allowStale: true });
+            return this._result({ ok: value !== null, data: value, fromCache: true, offline: offlineFlag, networkError });
+        }
+
+        // Nothing to serve.
+        return this._result({ offline: offlineFlag, networkError });
+    }
+
+    /**
+     * Appends a write to the replay queue. The format is locked, but nothing drains
+     * it yet: FSOffline.Sync (replay + reconciliation on reconnect) is a later phase.
+     *
+     * @param {string} db
+     * @param {object} request
+     * @returns {Promise<string>} The queued entry id.
+     */
+    async _enqueue(db, request) {
+        const store = await Cache.rawStore(db, HttpClient.QUEUE_STORE);
+        const id = Date.now() + '-' + Math.random().toString(36).slice(2, 8);
+        await store.set(id, {
+            id,
+            url: request.url,
+            method: request.method,
+            body: this._bodyToObject(request.body),
+            ts: Date.now()
+        });
+        return id;
+    }
+
+    /**
+     * @param {object} cache The cache spec.
+     * @param {string} url
+     * @param {object} options
+     * @returns {string}
+     */
+    _cacheKey(cache, url, options) {
+        return typeof cache.key === 'function' ? cache.key(url, options) : cache.key;
+    }
+
+    /**
+     * Normalizes a request body into a plain object for the offline hook / queue.
+     *
+     * @param {*} body
+     * @returns {object}
+     */
+    _bodyToObject(body) {
+        if (!body) {
+            return {};
+        }
+        if (body instanceof FormData) {
+            return Object.fromEntries(body.entries());
+        }
+        if (typeof body === 'string') {
+            try {
+                return JSON.parse(body);
+            } catch (error) {
+                return { _raw: body };
+            }
+        }
+        if (typeof body === 'object') {
+            return body;
+        }
+        return {};
+    }
+
+    /**
      * Builds a normalized Result, filling defaults.
      *
      * @param {object} partial
@@ -152,6 +253,8 @@ class HttpClient {
             data: null,
             networkError: false,
             offline: false,
+            fromCache: false,
+            applied: false,
             aborted: false,
             cancelled: false
         }, partial);
@@ -175,5 +278,8 @@ class HttpClient {
         return response.text();
     }
 }
+
+// Logical store name for the offline write queue (seam for FSOffline.Sync).
+HttpClient.QUEUE_STORE = '__queue__';
 
 export const Http = new HttpClient();

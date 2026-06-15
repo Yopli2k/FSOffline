@@ -65,6 +65,33 @@ window.FSOffline = window.FSOffline || {};
     }
 
     /**
+     * Resolves a logical store for a NAMED database WITHOUT changing the active
+     * database. It reuses the same pool of opened databases as use()/store(), so
+     * data is shared, but it never touches activeDatabase. This is the primitive
+     * FSOffline.Cache and the offline write hook rely on, so several plugins can
+     * cache and mutate in parallel safely.
+     *
+     * @param {string} dbName
+     * @param {string} storeName
+     * @returns {Promise<object>} An OfflineStore instance.
+     */
+    async function scopedStore(dbName, storeName) {
+        if (!dbName || !storeName) {
+            throw new Error('FSOffline: scopedStore() requires a database name and a store name.');
+        }
+
+        const DatabaseClass = await loadCore();
+        let database = databases.get(dbName);
+        if (!database) {
+            database = new DatabaseClass(dbName);
+            databases.set(dbName, database);
+        }
+
+        await database.open();
+        return database.store(storeName);
+    }
+
+    /**
      * Default ping URL for FSOffline.Connection.
      * FS_OFFLINE_BASE looks like ".../[subdir/]Dinamic/Assets/JS/FSOffline/", so we
      * cut at "/Dinamic/" to get the installation root and append the AppPing route.
@@ -132,36 +159,37 @@ window.FSOffline = window.FSOffline || {};
     };
 
     /**
-     * Bootstraps the connectivity layer: loads the Connection and Http modules,
-     * publishes them as FSOffline.Connection and FSOffline.Http, and initializes
-     * Connection. Call it once at app startup; afterwards both are available
-     * synchronously (no further import/await of the loading step).
+     * Bootstraps the offline layer: loads the Http module (which statically pulls
+     * Connection and Cache and re-exports them), publishes the three as
+     * FSOffline.Http / FSOffline.Connection / FSOffline.Cache, wires Cache to the
+     * store resolver and initializes Connection. Call it once at app startup;
+     * afterwards everything is available synchronously.
      *
-     * Http.js statically imports Connection.js, so both import() calls resolve to
-     * the very same singleton instances (the browser caches modules by URL).
+     * A SINGLE dynamic import of Http.js is used on purpose: it guarantees one
+     * shared instance of each singleton. Importing Connection.js / Cache.js here
+     * with the version query would create duplicate instances, because Http.js
+     * imports them statically without the query.
      *
      * @param {object} [options] Connection options (pingUrl, pingTimeout, backoff,
      *                           probeMinGap, failureThreshold, startOnline).
      * @returns {Promise<object>} The FSOffline facade, to allow chaining.
      */
     FSOffline.connect = async function (options = {}) {
-        const [connectionModule, httpModule] = await Promise.all([
-            import(FS_OFFLINE_BASE + 'FSOffline/Connection.js' + FS_OFFLINE_VERSION),
-            import(FS_OFFLINE_BASE + 'FSOffline/Http.js' + FS_OFFLINE_VERSION)
-        ]);
+        const module = await import(FS_OFFLINE_BASE + 'FSOffline/Http.js' + FS_OFFLINE_VERSION);
 
-        FSOffline.Connection = connectionModule.Connection;
-        FSOffline.Http = httpModule.Http;
+        FSOffline.Http = module.Http;
+        FSOffline.Connection = module.Connection;
+        FSOffline.Cache = module.Cache;
 
+        FSOffline.Cache.configure(scopedStore);
         FSOffline.Connection.init(Object.assign({ pingUrl: defaultPingUrl() }, options));
         return FSOffline;
     };
 
     /**
-     * Future extensions (FSOffline.Cache, FSOffline.Queue, FSOffline.Sync, ...)
-     * can be added as their own ES modules under the FSOffline/ folder
-     * and loaded here with dynamic import(), the same way as loadCore() and
-     * connect() do. They should rely only on the public facade above, keeping
-     * the public API stable and the internal classes private.
+     * Future extensions (FSOffline.Sync, ...) can be added as their own ES modules
+     * under the FSOffline/ folder and loaded here with dynamic import(), the same
+     * way as loadCore() and connect() do. They should rely only on the public
+     * facade above, keeping the public API stable and the internal classes private.
      */
 })(window.FSOffline);
