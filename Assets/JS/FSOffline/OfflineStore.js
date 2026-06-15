@@ -5,8 +5,7 @@
  *
  * This program and its files are under the terms of the license specified in the LICENSE file.
  *
- * ES module: loaded only through dynamic import(). It is never exposed on the
- * global object.
+ * ES module: loaded only through dynamic import().
  */
 "use strict";
 
@@ -19,8 +18,11 @@
  * IndexedDB versioning / migration) is ever needed.
  */
 export class OfflineStore {
-
     /**
+     * Create an object associated to store name.
+     * All data is saved with logical key (StoreName:key)
+     * for avail store versions.
+     *
      * @param {IndexedDBDriver} driver
      * @param {string} name - Logical store name.
      */

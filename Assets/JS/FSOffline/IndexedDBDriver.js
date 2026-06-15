@@ -5,8 +5,7 @@
  *
  * This program and its files are under the terms of the license specified in the LICENSE file.
  *
- * ES module: loaded only through dynamic import() from FSOffline.js. It is never
- * exposed on the global object.
+ * ES module: loaded only through dynamic import() from FSOffline.js.
  */
 "use strict";
 
@@ -17,7 +16,6 @@
  * about physical keys; it has no concept of logical stores.
  */
 export class IndexedDBDriver {
-
     /**
      * @param {string} databaseName - Name of the IndexedDB database.
      * @param {string} objectStoreName - Name of the single physical object store.
@@ -74,7 +72,6 @@ export class IndexedDBDriver {
      */
     async run(mode, callback) {
         const db = await this.open();
-
         return new Promise((resolve, reject) => {
             const transaction = db.transaction(this.objectStoreName, mode);
             const store = transaction.objectStore(this.objectStoreName);
@@ -95,6 +92,8 @@ export class IndexedDBDriver {
     }
 
     /**
+     * Return the value for indicated key.
+     *
      * @param {IDBValidKey} key
      * @returns {Promise<*>}
      */
@@ -103,6 +102,8 @@ export class IndexedDBDriver {
     }
 
     /**
+     * Return all stored values.
+     *
      * @param {IDBKeyRange} range
      * @returns {Promise<Array>}
      */
@@ -111,6 +112,8 @@ export class IndexedDBDriver {
     }
 
     /**
+     * Saved the data and associated to key.
+     *
      * @param {IDBValidKey} key
      * @param {*} value
      * @returns {Promise<void>}

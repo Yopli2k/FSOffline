@@ -22,7 +22,7 @@
  * The internal classes live in the FSOffline/ folder as ES modules and are loaded lazily.
  *
  * Public API:
- *     await FSOffline.use('PortalAgente');
+ *     await FSOffline.use('MyDatabase');
  *
  *     const products = FSOffline.store('products');
  *     await products.set('REF001', data);
@@ -62,6 +62,21 @@ window.FSOffline = window.FSOffline || {};
             OfflineDatabase = module.OfflineDatabase;
         }
         return OfflineDatabase;
+    }
+
+    /**
+     * Default ping URL for FSOffline.Connection.
+     * FS_OFFLINE_BASE looks like ".../[subdir/]Dinamic/Assets/JS/FSOffline/", so we
+     * cut at "/Dinamic/" to get the installation root and append the AppPing route.
+     * Works whether FacturaScripts lives at the domain root or in a subdirectory.
+     *
+     * @returns {string}
+     */
+    function defaultPingUrl() {
+        const marker = '/Dinamic/';
+        const index = FS_OFFLINE_BASE.indexOf(marker);
+        const root = index >= 0 ? FS_OFFLINE_BASE.substring(0, index) : window.location.origin;
+        return root + '/AppPing';
     }
 
     /**
@@ -117,10 +132,36 @@ window.FSOffline = window.FSOffline || {};
     };
 
     /**
-     * Future extensions (FSOffline.Cache, FSOffline.Queue, FSOffline.Sync, FSOffline.Connection, ...)
+     * Bootstraps the connectivity layer: loads the Connection and Http modules,
+     * publishes them as FSOffline.Connection and FSOffline.Http, and initializes
+     * Connection. Call it once at app startup; afterwards both are available
+     * synchronously (no further import/await of the loading step).
+     *
+     * Http.js statically imports Connection.js, so both import() calls resolve to
+     * the very same singleton instances (the browser caches modules by URL).
+     *
+     * @param {object} [options] Connection options (pingUrl, pingTimeout, backoff,
+     *                           probeMinGap, failureThreshold, startOnline).
+     * @returns {Promise<object>} The FSOffline facade, to allow chaining.
+     */
+    FSOffline.connect = async function (options = {}) {
+        const [connectionModule, httpModule] = await Promise.all([
+            import(FS_OFFLINE_BASE + 'FSOffline/Connection.js' + FS_OFFLINE_VERSION),
+            import(FS_OFFLINE_BASE + 'FSOffline/Http.js' + FS_OFFLINE_VERSION)
+        ]);
+
+        FSOffline.Connection = connectionModule.Connection;
+        FSOffline.Http = httpModule.Http;
+
+        FSOffline.Connection.init(Object.assign({ pingUrl: defaultPingUrl() }, options));
+        return FSOffline;
+    };
+
+    /**
+     * Future extensions (FSOffline.Cache, FSOffline.Queue, FSOffline.Sync, ...)
      * can be added as their own ES modules under the FSOffline/ folder
-     * and loaded here with dynamic import(), the same way as loadCore() does.
-     * They should rely only on the public facade above, keeping
+     * and loaded here with dynamic import(), the same way as loadCore() and
+     * connect() do. They should rely only on the public facade above, keeping
      * the public API stable and the internal classes private.
      */
 })(window.FSOffline);

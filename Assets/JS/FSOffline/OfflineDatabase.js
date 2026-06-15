@@ -5,9 +5,9 @@
  *
  * This program and its files are under the terms of the license specified in the LICENSE file.
  *
- * ES module: loaded through dynamic import() from FSOffline.js. It pulls its own
- * dependencies (IndexedDBDriver, OfflineStore) with static imports, which resolve
- * relative to this module's URL.
+ * ES module: loaded through dynamic import() from FSOffline.js.
+ * It pulls its own dependencies (IndexedDBDriver, OfflineStore) with static imports,
+ * which resolve relative to this module's URL.
  */
 "use strict";
 
@@ -21,7 +21,6 @@ import { OfflineStore } from './OfflineStore.js';
  * on demand.
  */
 export class OfflineDatabase {
-
     // Name of the single physical object store used inside every database.
     static OBJECT_STORE_NAME = 'keyValueStore';
 

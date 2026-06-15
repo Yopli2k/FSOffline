@@ -90,6 +90,72 @@ const all  = await products.all();
 
 Todos los métodos son asíncronos y devuelven `Promise`.
 
+## Capa de conexión (Connection + Http)
+
+Además del almacén key/value, FSOffline ofrece una capa para centralizar las
+peticiones de red y conocer en todo momento si hay conexión con el servidor.
+
+```javascript
+// 1. Arrancar una vez al cargar la app.
+await FSOffline.connect();              // o connect({ pingTimeout: 4000, ... })
+
+// 2. Estado de conexión (síncrono).
+if (FSOffline.Connection.isOnline()) { /* ... */ }
+
+// 3. Reaccionar a los cambios.
+FSOffline.Connection.onChange(({ online }) => mostrarBanner(!online));
+window.addEventListener('fsoffline:connection', e => console.log(e.detail.online));
+
+// 4. Hacer peticiones por el gateway (nunca lanza; devuelve un Result).
+const res = await FSOffline.Http.post(window.location.href, formData);
+if (res.offline) { /* sin conexión: servir de cache */ }
+else if (res.ok) { /* res.data */ }
+```
+
+### FSOffline.Connection
+
+Fuente única del estado online/offline.
+
+| Método | Descripción |
+| --- | --- |
+| `init(options)` | Configura (lo llama `connect()`). Idempotente. |
+| `isOnline()` | `boolean` (síncrono). |
+| `state()` | `'online'` \| `'offline'`. |
+| `onChange(cb)` | Suscribe a cambios. Devuelve función para desuscribir. |
+| `check()` | Fuerza un ping inmediato. `Promise<boolean>`. |
+
+- Solo un **fallo de red real** (excepción de `fetch` o timeout) pasa a OFFLINE;
+  una respuesta HTTP de error (4xx/5xx) significa servidor vivo → sigue ONLINE.
+- La **recuperación** está desacoplada del negocio: temporizador con backoff
+  `[10, 30, 60, 120, 300]s`, más el evento `online` del navegador, más un sondeo
+  oportunista en actividad solo si pasó `probeMinGap` (30s) desde el último ping.
+
+Opciones de `connect()` / `init()`: `pingUrl`, `pingTimeout` (4000), `backoff`,
+`probeMinGap` (30000), `failureThreshold` (1), `startOnline`.
+
+### FSOffline.Http
+
+Único portal de salida a la red. Envuelve `fetch` con timeout, alimenta a
+`Connection` y normaliza el resultado (nunca lanza).
+
+| Método | Descripción |
+| --- | --- |
+| `request(url, options)` | `options`: `method, body, headers, timeout, signal, force`. |
+| `get(url, options)` | Atajo GET. |
+| `post(url, body, options)` | `body` `FormData` se envía tal cual; objeto plano → JSON. |
+
+Result: `{ ok, status, data, networkError, offline, aborted, cancelled }`.
+Si `Connection` está OFFLINE, `request()` **cortocircuita** y devuelve
+`{ offline: true }` al instante (sin gastar el timeout), salvo que se pase
+`force: true`.
+
+### Endpoint de ping (servidor)
+
+El controlador `AppPing` (`/AppPing`) responde un `204` sin cuerpo, sin auth, sin
+plantillas y sin escribir nada (BD/log). Es el endpoint de comprobación que usa
+`Connection` para confirmar que el servidor está vivo. La protección anti-DoS
+corresponde a la infraestructura (rate limiting del proxy), no al controlador.
+
 ## Decisiones de diseño
 
 - Cada nombre de base de datos se corresponde con una base de datos IndexedDB
@@ -114,8 +180,8 @@ ES dentro de `Assets/JS/FSOffline/`, cargados con `import()` desde la fachada
 FSOffline.Cache
 FSOffline.Queue
 FSOffline.Sync
-FSOffline.Connection
 ```
 
 Cada extensión debe apoyarse únicamente en la API pública
-(`FSOffline.use` / `FSOffline.store`), manteniendo las clases internas privadas.
+(`FSOffline.use` / `FSOffline.store` / `FSOffline.Connection` / `FSOffline.Http`),
+manteniendo las clases internas privadas.
