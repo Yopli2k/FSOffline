@@ -72,4 +72,4 @@ que cambió. Online, no se llama a `apply`: la escritura va al servidor como sie
 
 `queue: true` graba la escritura en el store `__queue__` de la base del plugin con
 formato `{ id, url, method, body, ts }`. **Nadie la drena todavía**: el reenvío al
-servidor y la reconciliación al reconectar son `FSOffline.Sync`, una fase posterior.
+servidor y la reconciliación al reconectar son `FSOffline.Sync`, una mejora futura.

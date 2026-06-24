@@ -12,12 +12,12 @@
  * served by the /MediaCache controller (which adds the Service-Worker-Allowed
  * header so it can claim the install-root scope).
  *
- * What it does (phase 2): for image GET requests whose path matches one of the
- * configured prefixes, it applies cache-first + expiration + fallback against the
- * Cache API, stripping the authorization query token from the cache key (the same
- * image is cached once regardless of the ?token=... it was downloaded with). Any
- * other request is left untouched (no respondWith), so the browser handles it as
- * if no worker existed.
+ * For image GET requests whose path matches one of the configured prefixes, it
+ * applies cache-first + expiration + fallback against the Cache API, stripping
+ * the authorization query token from the cache key (the same image is cached
+ * once regardless of the ?token=... it was downloaded with). Any other request
+ * is left untouched (no respondWith), so the browser handles it as if no worker
+ * existed.
  *
  * The configuration travels from FSOffline.Media.register() through IndexedDB
  * (base FSOffline, physical store keyValueStore, keys "media-config:<id>"),
@@ -27,7 +27,7 @@
  */
 "use strict";
 
-// Bump to invalidate old caches in activate (phase 3, eviction/versioning).
+// Bump to invalidate old caches on activate (cleanupOldCaches).
 const MEDIA_WORKER_VERSION = 'v1';
 
 // IndexedDB coordinates of the per-plugin media config (mirror of OfflineDatabase

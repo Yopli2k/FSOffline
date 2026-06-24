@@ -83,7 +83,7 @@ la tuya con `FSOffline.use('TuPlugin')`.
 - Cada responsabilidad vive en su propio archivo, así el proyecto escala sin que
   los archivos crezcan.
 
-## Futuras ampliaciones
+## Futuras mejoras
 
 La arquitectura está preparada para añadir nuevas responsabilidades como módulos
 ES dentro de `Assets/JS/FSOffline/`, cargados con `import()` desde la fachada

@@ -77,8 +77,8 @@ await FSOffline.Media.register({
 - [media.md](docs/media.md) — `FSOffline.Media` (Service Worker, `/MediaCache`,
   estrategia, eviction, contexto seguro).
 
-## Estado
+## Futuras mejoras
 
-Implementado: almacén key/value, `Connection`, `Http`, `Cache` y `Media` (cache de
-imágenes, completa). Pendiente: `FSOffline.Sync` (drenar la cola `__queue__` y
-reconciliar al reconectar). Ver [http.md](docs/http.md#cola-de-escrituras-__queue__).
+- `FSOffline.Sync` — drenar la cola `__queue__` (reenviar las escrituras al
+  reconectar) y reconciliar con el servidor. Ver
+  [http.md](docs/http.md#cola-de-escrituras-__queue__).

@@ -20,15 +20,12 @@
  * the worker reads from (a service worker is killed and restarted by the browser,
  * so its config cannot live in memory).
  *
- * PHASE 1 (this file): secure-context guard, worker registration/unregistration
- * and config persistence. The worker does not intercept anything yet (phase 2).
- *
  * Exported as a singleton so FSOffline.connect() publishes a single FSOffline.Media.
  */
 "use strict";
 
-// IndexedDB location of the per-plugin media config. The phase 2 worker reads
-// these same names, so they are part of the contract between both halves.
+// IndexedDB location of the per-plugin media config. The worker reads these
+// same names, so they are part of the contract between both halves.
 const CONFIG_DB = 'FSOffline';
 const CONFIG_STORE = 'media-config';
 

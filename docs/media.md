@@ -111,10 +111,3 @@ La Cache API no tiene LRU ni límite propio, así que el worker lo gestiona:
 > **Nota de cuota**: el límite real no es `maxEntries` sino la cuota de bytes del
 > origen (en escritorio, GB; en iOS/Safari es mucho más estricto y desaloja con
 > agresividad). Dimensiona pensando en MB totales (`maxEntries` × tamaño medio).
-
-## Estado
-
-Fases 1, 2 y 3 implementadas. El subsistema Media está completo: registro en
-contexto seguro, controlador `/MediaCache`, persistencia de config, intercepción
-cache-first + caducidad + fallback (ignorando el token), y eviction por
-capacidad/cuota con limpieza de versiones.
