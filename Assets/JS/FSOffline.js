@@ -92,18 +92,42 @@ window.FSOffline = window.FSOffline || {};
     }
 
     /**
-     * Default ping URL for FSOffline.Connection.
+     * Installation root URL (no trailing slash).
      * FS_OFFLINE_BASE looks like ".../[subdir/]Dinamic/Assets/JS/FSOffline/", so we
-     * cut at "/Dinamic/" to get the installation root and append the AppPing route.
-     * Works whether FacturaScripts lives at the domain root or in a subdirectory.
+     * cut at "/Dinamic/" to get the root. Works whether FacturaScripts lives at the
+     * domain root or in a subdirectory.
+     *
+     * @returns {string}
+     */
+    function installRoot() {
+        const marker = '/Dinamic/';
+        const index = FS_OFFLINE_BASE.indexOf(marker);
+        return index >= 0 ? FS_OFFLINE_BASE.substring(0, index) : window.location.origin;
+    }
+
+    /**
+     * Default ping URL for FSOffline.Connection (the AppPing route).
      *
      * @returns {string}
      */
     function defaultPingUrl() {
-        const marker = '/Dinamic/';
-        const index = FS_OFFLINE_BASE.indexOf(marker);
-        const root = index >= 0 ? FS_OFFLINE_BASE.substring(0, index) : window.location.origin;
-        return root + '/AppPing';
+        return installRoot() + '/AppPing';
+    }
+
+    /**
+     * Runtime context for FSOffline.Media: the absolute URL of the /MediaCache
+     * controller that serves the service worker, and the install-root scope it is
+     * registered at ("/" at the domain root, "/subdir/" in a subdirectory). The
+     * scope matches the Service-Worker-Allowed header the controller sends.
+     *
+     * @returns {{workerUrl: string, scope: string}}
+     */
+    function mediaContext() {
+        const root = installRoot();
+        return {
+            workerUrl: root + '/MediaCache',
+            scope: new URL(root + '/').pathname
+        };
     }
 
     /**
@@ -163,7 +187,7 @@ window.FSOffline = window.FSOffline || {};
      * Connection and Cache and re-exports them), publishes the three as
      * FSOffline.Http / FSOffline.Connection / FSOffline.Cache, wires Cache to the
      * store resolver and initializes Connection. Call it once at app startup;
-     * afterwards everything is available synchronously.
+     * afterward everything is available synchronously.
      *
      * A SINGLE dynamic import of Http.js is used on purpose: it guarantees one
      * shared instance of each singleton. Importing Connection.js / Cache.js here
@@ -183,6 +207,16 @@ window.FSOffline = window.FSOffline || {};
 
         FSOffline.Cache.configure(scopedStore);
         FSOffline.Connection.init(Object.assign({ pingUrl: defaultPingUrl() }, options));
+
+        // Media (image/static) offline cache facade. Loaded as its own singleton;
+        // nothing else imports Media.js, so there is no duplicate-instance risk.
+        // Publishing it here only makes FSOffline.Media available: no service
+        // worker is registered until a consumer calls FSOffline.Media.register().
+        const mediaModule = await import(FS_OFFLINE_BASE + 'FSOffline/Media.js' + FS_OFFLINE_VERSION);
+        FSOffline.Media = mediaModule.Media;
+
+        const media = mediaContext();
+        FSOffline.Media.configure({ storeResolver: scopedStore, workerUrl: media.workerUrl, scope: media.scope });
         return FSOffline;
     };
 
