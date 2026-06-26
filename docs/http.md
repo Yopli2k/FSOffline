@@ -57,7 +57,7 @@ await FSOffline.Http.post(url, formData, {
             await ctx.store.set(order.idorder, order);
             return { error: false, order };   // respuesta sintética para tu onSuccess
         },
-        queue: true   // registra la escritura para el futuro FSOffline.Sync
+        queue: true   // registra la escritura para que FSOffline.Sync la reenvíe
     }
 });
 ```
@@ -71,5 +71,6 @@ que cambió. Online, no se llama a `apply`: la escritura va al servidor como sie
 ## Cola de escrituras (`__queue__`)
 
 `queue: true` graba la escritura en el store `__queue__` de la base del plugin con
-formato `{ id, url, method, body, ts }`. **Nadie la drena todavía**: el reenvío al
-servidor y la reconciliación al reconectar son `FSOffline.Sync`, una mejora futura.
+formato `{ id, url, method, body, ts }`, y emite el evento `fsoffline:enqueued`
+(`{ db }`). Quien la **reenvía al servidor** al reconectar (en orden y con
+reconciliación) es [`FSOffline.Sync`](sync.md).

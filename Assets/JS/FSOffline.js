@@ -217,13 +217,27 @@ window.FSOffline = window.FSOffline || {};
 
         const media = mediaContext();
         FSOffline.Media.configure({ storeResolver: scopedStore, workerUrl: media.workerUrl, scope: media.scope });
+
+        // Sync (offline write queue): resends queued writes on reconnect and lets the
+        // consumer reconcile. Loaded as its own singleton; nothing else imports
+        // Sync.js, so there is no duplicate-instance risk. The shared Http/Connection
+        // singletons and the store resolver are INJECTED (not imported) on purpose,
+        // for the same reason noted above. No queue is touched until a consumer calls
+        // FSOffline.Sync.register().
+        const syncModule = await import(FS_OFFLINE_BASE + 'FSOffline/Sync.js' + FS_OFFLINE_VERSION);
+        FSOffline.Sync = syncModule.Sync;
+        FSOffline.Sync.configure({
+            storeResolver: scopedStore,
+            http: FSOffline.Http,
+            connection: FSOffline.Connection
+        });
         return FSOffline;
     };
 
     /**
-     * Future extensions (FSOffline.Sync, ...) can be added as their own ES modules
-     * under the FSOffline/ folder and loaded here with dynamic import(), the same
-     * way as loadCore() and connect() do. They should rely only on the public
-     * facade above, keeping the public API stable and the internal classes private.
+     * Future extensions can be added as their own ES modules under the FSOffline/
+     * folder and loaded here with dynamic import(), the same way as loadCore() and
+     * connect() do. They should rely only on the public facade above, keeping the
+     * public API stable and the internal classes private.
      */
 })(window.FSOffline);

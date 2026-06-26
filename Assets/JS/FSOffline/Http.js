@@ -184,8 +184,9 @@ class HttpClient {
     }
 
     /**
-     * Appends a write to the replay queue. The format is locked, but nothing drains
-     * it yet: FSOffline.Sync (replay + reconciliation on reconnect) is a later phase.
+     * Appends a write to the queue FSOffline.Sync resends on reconnect. After storing
+     * it, emits 'fsoffline:enqueued' so Sync can keep its synchronous pending counter
+     * (and the consumer "N unsent" indicator) in sync without polling the store.
      *
      * @param {string} db
      * @param {object} request
@@ -201,6 +202,7 @@ class HttpClient {
             body: this._bodyToObject(request.body),
             ts: Date.now()
         });
+        window.dispatchEvent(new CustomEvent('fsoffline:enqueued', { detail: { db } }));
         return id;
     }
 

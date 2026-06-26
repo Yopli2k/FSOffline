@@ -1,7 +1,7 @@
 # FSOffline
 
 Conjunto de utilidades **reutilizables** para dar soporte *offline* a plugins de
-FacturaScripts. Empezó como una capa sobre IndexedDB y hoy reúne cinco piezas que
+FacturaScripts. Empezó como una capa sobre IndexedDB y hoy reúne seis piezas que
 el plugin consumidor usa desde un único asset (`FSOffline.js`):
 
 | Pieza | Para qué sirve | Doc |
@@ -11,6 +11,7 @@ el plugin consumidor usa desde un único asset (`FSOffline.js`):
 | `FSOffline.Http` | Único gateway de red: envuelve `fetch`, alimenta a `Connection`, nunca lanza. | [http.md](docs/http.md) |
 | `FSOffline.Cache` | Cache de respuestas key/value con TTL. | [cache.md](docs/cache.md) |
 | `FSOffline.Media` | Cache de imágenes/medios online y offline vía *Service Worker*. | [media.md](docs/media.md) |
+| `FSOffline.Sync` | Reenvía la cola de escrituras offline al reconectar y reconcilia. | [sync.md](docs/sync.md) |
 
 Salvo `Media` (que exige *Service Worker* y contexto seguro), todo funciona también
 en HTTP plano.
@@ -64,6 +65,11 @@ await FSOffline.Media.register({
     fallback: '/Dinamic/Assets/Images/no-image.webp',
     maxEntries: 5000
 });
+
+// Reenvío de la cola de escrituras offline al reconectar + reconciliación.
+FSOffline.Sync.register('MyDatabase', {
+    onComplete: async () => { /* releer estado y parchear la vista en sitio */ }
+});
 ```
 
 ## Documentación
@@ -76,9 +82,5 @@ await FSOffline.Media.register({
 - [cache.md](docs/cache.md) — `FSOffline.Cache` (TTL, `scope`, `rawStore`).
 - [media.md](docs/media.md) — `FSOffline.Media` (Service Worker, `/MediaCache`,
   estrategia, eviction, contexto seguro).
-
-## Futuras mejoras
-
-- `FSOffline.Sync` — drenar la cola `__queue__` (reenviar las escrituras al
-  reconectar) y reconciliar con el servidor. Ver
-  [http.md](docs/http.md#cola-de-escrituras-__queue__).
+- [sync.md](docs/sync.md) — `FSOffline.Sync` (reenvío de la cola `__queue__`,
+  política, buzón de fallidas, durabilidad, reconciliación).

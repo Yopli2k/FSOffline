@@ -18,7 +18,8 @@ Assets/JS/
     ├── Http.js                   # Gateway de red + cache de lectura (módulo ES)
     ├── Cache.js                  # Cache key/value con TTL (módulo ES)
     ├── Media.js                  # Gestor de la cache de medios (módulo ES)
-    └── media-worker.js           # Service worker de la cache de medios (NO es módulo ES)
+    ├── media-worker.js           # Service worker de la cache de medios (NO es módulo ES)
+    └── Sync.js                   # Reenvío de la cola de escrituras offline (módulo ES)
 Controller/
 ├── AppPing.php                   # Endpoint /AppPing (ping de Connection)
 └── MediaCache.php                # Sirve el service worker de Media (ruta /MediaCache)
@@ -29,10 +30,10 @@ reúne dos tipos de archivo distintos según **quién los carga**, no según dó
 estén:
 
 - **Módulos ES privados** (`IndexedDBDriver`, `OfflineStore`, `OfflineDatabase`,
-  `Connection`, `Http`, `Cache`, `Media`): la fachada los carga **nombrándolos
-  uno a uno** con `import()` dinámico. No hay autodescubrimiento de la carpeta; un
-  archivo que nadie nombra en un `import()` nunca se carga como módulo. Así las
-  clases internas viven en scope de módulo y no en el objeto global.
+  `Connection`, `Http`, `Cache`, `Media`, `Sync`): la fachada los carga
+  **nombrándolos uno a uno** con `import()` dinámico. No hay autodescubrimiento de la
+  carpeta; un archivo que nadie nombra en un `import()` nunca se carga como módulo.
+  Así las clases internas viven en scope de módulo y no en el objeto global.
 - **El service worker** (`media-worker.js`): **no** es un módulo ES y **no** se
   carga con `import()`. Lo ejecuta el runtime de Service Worker del navegador,
   servido por el controlador `/MediaCache`. Vive aquí solo por cohesión con
@@ -44,8 +45,9 @@ estén:
 `import()` de `Http.js` (que reexporta `Connection` y `Cache` con instancia
 compartida), publica `FSOffline.Http` / `FSOffline.Connection` / `FSOffline.Cache`,
 configura `Cache` con el resolutor de stores e inicializa `Connection`. Después
-importa `Media.js` y publica `FSOffline.Media`. Tras `connect()`, todo está
-disponible de forma síncrona.
+importa `Media.js` y publica `FSOffline.Media`, y luego importa `Sync.js`, publica
+`FSOffline.Sync` y lo configura (inyectándole los singletons `Http` / `Connection` y
+el resolutor de stores). Tras `connect()`, todo está disponible de forma síncrona.
 
 El almacén key/value (`use`/`store`) funciona **sin** `connect()`: es la base sobre
 la que se apoyan las demás piezas.
@@ -87,12 +89,7 @@ la tuya con `FSOffline.use('TuPlugin')`.
 
 La arquitectura está preparada para añadir nuevas responsabilidades como módulos
 ES dentro de `Assets/JS/FSOffline/`, cargados con `import()` desde la fachada
-(igual que hace `loadCore()`), sin romper la API pública:
-
-```javascript
-FSOffline.Sync   // reenvío de la cola de escrituras y reconciliación al reconectar
-```
-
-Cada extensión debe apoyarse únicamente en la API pública (`FSOffline.use` /
-`FSOffline.store` / `FSOffline.Connection` / `FSOffline.Http` / `FSOffline.Cache` /
-`FSOffline.Media`), manteniendo las clases internas privadas.
+(igual que hace `loadCore()`), sin romper la API pública. Cada extensión debe
+apoyarse únicamente en la API pública (`FSOffline.use` / `FSOffline.store` /
+`FSOffline.Connection` / `FSOffline.Http` / `FSOffline.Cache` / `FSOffline.Media` /
+`FSOffline.Sync`), manteniendo las clases internas privadas.
