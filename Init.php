@@ -26,7 +26,7 @@ use FacturaScripts\Core\Template\InitClass;
  *
  * @author Jose Antonio Cuello Principal <yopli2000@gmail.com>
  */
-final class Init extends InitClass
+class Init extends InitClass
 {
     public function init(): void
     {
